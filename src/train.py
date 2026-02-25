@@ -13,8 +13,10 @@ from dataset import ChordDataset
 from monitor import GPUMonitor
 from utils import cycle
 
+import argparse
+
 # Import the new wrapper
-from distributed_utils import AsyncDDP
+from distributed_utils import AsyncDDP, BucketDDP
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -91,6 +93,13 @@ def evaluate(model, val_loader, device, max_batches=50):
 def train():
     # 1. Setup
     rank, local_rank, world_size, is_ddp = setup_distributed()
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--ddp_impl", type=str, default="async", choices=["async", "bucket"]
+    )
+    parser.add_argument("--bucket_mb", type=float, default=25.0)
+
+    args, _ = parser.parse_known_args()
     master_process = rank == 0
     device = f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu"
 
@@ -105,15 +114,22 @@ def train():
 
     # 2. Create Model
     model = ChordGPT(config).to(device)
-
     # 3. Wrap in AsyncDDP
     if is_ddp:
-        model = AsyncDDP(model, device_id=local_rank)
-        raw_model = model.module
+        if args.ddp_impl == "bucket":
+            model = BucketDDP(model, device_id=local_rank, bucket_mb=args.bucket_mb)
+        else:
+            model = AsyncDDP(model, device_id=local_rank)
+        raw_model = model.module  # for optimizer access
     else:
         raw_model = model
         # Dummy sync method for single GPU so code doesn't break
         model.synchronize = lambda: None
+        model.get_and_reset_comm_stats = lambda: {
+            "allreduce_calls": 0,
+            "allreduce_bytes": 0,
+            "sync_wait_ms": 0.0,
+        }
 
     # 4. Optimizer (on raw_model parameters)
     param_dict = {pn: p for pn, p in raw_model.named_parameters() if p.requires_grad}
@@ -192,6 +208,11 @@ def train():
             writer.add_scalar("Train/Loss", loss.item(), step)
             writer.add_scalar("Train/Throughput", throughput, step)
             writer.add_scalar("Train/LR", optimizer.param_groups[0]["lr"], step)
+
+            comm = model.get_and_reset_comm_stats()
+            writer.add_scalar("DDP/AllReduceCalls", comm["allreduce_calls"], step)
+            writer.add_scalar("DDP/AllReduceBytes", comm["allreduce_bytes"], step)
+            writer.add_scalar("DDP/SyncWaitMs", comm["sync_wait_ms"], step)
 
             for g in gpu_stats:
                 idx = g["id"]
