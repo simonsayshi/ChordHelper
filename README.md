@@ -10,3 +10,11 @@ To achieve this, I aim to leverage a large language model (LLM) trained on pop s
 ## Goal
 This application integrates harmonic frameworks from jazz, pop, and R&B with modern large language model (LLM) techniques, using fine-tuning to generate musically rich and stylistically diverse chord progressions. 
 In addition to building the application, I am using this project as an opportunity to strengthen my machine learning expertise through real-world experimentation and implementation.
+
+
+## Training 
+TensorBoard graphs
+
+[GPU Utilization](./GPU%20utilization.PNG)
+
+[Training status](./Training%20status.PNG)
