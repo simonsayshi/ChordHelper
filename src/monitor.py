@@ -1,4 +1,3 @@
-from math import log
 import subprocess
 import csv
 import io

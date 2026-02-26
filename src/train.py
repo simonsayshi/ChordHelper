@@ -114,7 +114,7 @@ def train():
 
     # 2. Create Model
     model = ChordGPT(config).to(device)
-    # 3. Wrap in AsyncDDP
+    # 3. Conditonally wrap in different DDP topologys
     if is_ddp:
         if args.ddp_impl == "bucket":
             model = BucketDDP(model, device_id=local_rank, bucket_mb=args.bucket_mb)
@@ -179,8 +179,7 @@ def train():
         # Compute gradients, hooks are fired to sync asynchronously in the background while we do other CPU work.
         loss.backward()
 
-        # --- CRITICAL: WAIT FOR SYNC ---
-        # We explicitly wait for all async handles to finish before stepping.
+        # Important: We explicitly wait for all async handles to finish before stepping.
         model.synchronize()
 
         # Clip & Update

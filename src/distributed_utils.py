@@ -11,7 +11,7 @@ class AsyncDDP(nn.Module):
         self.module = module
         self.device_id = device_id
 
-        # We store handles to the async communication tasks here
+        # Store handles to the async communication tasks here
         self.async_handles = []
 
         # ---- stats for TensorBoard ----
@@ -33,6 +33,7 @@ class AsyncDDP(nn.Module):
             return
 
         # print(f"[AsyncDDP] Broadcasting initial parameters from Rank 0...")
+        # make sure all processes start with the same parameters (important for reproducibility)
         for p in self.module.parameters():
             dist.broadcast(p.data, src=0)
 
@@ -56,13 +57,13 @@ class AsyncDDP(nn.Module):
             # --- metrics ---
             self._allreduce_calls += 1
             self._allreduce_bytes += param.grad.numel() * param.grad.element_size()
-            # --- THE PICOTRON / INDUSTRIAL METHOD ---
             # 1. Fire the All-Reduce asynchronously.
             #    The CPU sends the command and IMMEDIATELY continues.
             #    It does NOT wait for the GPU to finish.
             handle = dist.all_reduce(param.grad, op=dist.ReduceOp.SUM, async_op=True)
 
             # 2. Store the handle and the param so we can finish it later
+            #  execute handle.wait() to block and wait for this specific all-reduce to finish.
             self.async_handles.append((handle, param))
 
         return hook
@@ -107,6 +108,7 @@ class AsyncDDP(nn.Module):
     def forward(self, *args, **kwargs):
         return self.module(*args, **kwargs)
 
+
 class BucketDDP(nn.Module):
     """
     - Pack grads into flat buffers (buckets)
@@ -115,6 +117,7 @@ class BucketDDP(nn.Module):
 
     This reduces all_reduce call count drastically vs AsyncDDP.
     """
+
     def __init__(self, module, device_id, bucket_mb=25):
         super().__init__()
         self.module = module
@@ -184,7 +187,11 @@ class BucketDDP(nn.Module):
                 dtype = p.dtype
                 device = p.device
 
-            if (p.dtype != dtype) or (p.device != device) or (cur_bytes + p_bytes > self.bucket_bytes):
+            if (
+                (p.dtype != dtype)
+                or (p.device != device)
+                or (cur_bytes + p_bytes > self.bucket_bytes)
+            ):
                 flush_bucket()
                 dtype = p.dtype
                 device = p.device
@@ -200,7 +207,7 @@ class BucketDDP(nn.Module):
         # map param -> (bucket_id, offset, numel)
         self.param_to_bucket = {}
         for bi, b in enumerate(self.buckets):
-            for (p, off, n) in b["entries"]:
+            for p, off, n in b["entries"]:
                 self.param_to_bucket[p] = (bi, off, n)
 
     def _register_hooks(self):
@@ -223,8 +230,12 @@ class BucketDDP(nn.Module):
             b["ready_count"] += 1
             if b["ready_count"] == b["total_count"]:
                 self._allreduce_calls += 1
-                self._allreduce_bytes += b["buffer"].numel() * b["buffer"].element_size()
-                b["handle"] = dist.all_reduce(b["buffer"], op=dist.ReduceOp.SUM, async_op=True)
+                self._allreduce_bytes += (
+                    b["buffer"].numel() * b["buffer"].element_size()
+                )
+                b["handle"] = dist.all_reduce(
+                    b["buffer"], op=dist.ReduceOp.SUM, async_op=True
+                )
 
         return hook
 
@@ -245,7 +256,7 @@ class BucketDDP(nn.Module):
             b["buffer"] /= world
 
             # Unpack back into param.grad
-            for (p, off, n) in b["entries"]:
+            for p, off, n in b["entries"]:
                 if p.grad is None:
                     continue
                 p.grad.view(-1).copy_(b["buffer"][off : off + n])
