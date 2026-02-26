@@ -12,6 +12,9 @@ This repo aims to build a scalable, distributed training framework for transform
 
 The core objective is to implement and compare different distributed data parallel (DDP) strategies — including manual gradient synchronization, asynchronous gradient reduction, and bucket-based communication — to explore how gradient flow, autograd hooks, and communication scheduling affect performance and scalability.
 
+## Example of chord generation
+![](/asset/ChordGeneration.PNG)
+
 ## Quick start
 
 clone this repo to local, make sure you have at least 2 GPUs. I rented 2 only
