@@ -45,7 +45,7 @@ class CasualSelfAttention(nn.Module):
         )  # (B, n_heads, T, d_head)
 
         if self.flash:
-            attn = F.scaled_dot_product_attention(
+            y = F.scaled_dot_product_attention(
                 q, k, v, attn_mask=None, dropout_p=0.0, is_causal=True
             )
         else:
@@ -55,7 +55,7 @@ class CasualSelfAttention(nn.Module):
             atten = atten.masked_fill(self.bias[:, :, :T, :T] == 0, float("-inf"))
             atten = F.softmax(atten, dim=-1)  # (B, n_heads, T, T)
             y = atten @ v  # (B, n_heads, T, d_head)
-        y = attn.transpose(1, 2).contiguous().view(B, T, C)  # (B, T, d_model)
+        y = y.transpose(1, 2).contiguous().view(B, T, C)  # (B, T, d_model)
         return self.project_out(y)  # (B, T, d_model)
 
 
@@ -91,7 +91,6 @@ class ChordGPT(nn.Module):
     def __init__(self, config: ModelConfig):
         super().__init__()
         self.config = config
-        self.position_embedding = nn.Embedding(config.seq_len, config.d_model)
         self.transformer = nn.ModuleDict(
             dict(
                 wte=nn.Embedding(config.vocab_size, config.d_model),
@@ -110,7 +109,7 @@ class ChordGPT(nn.Module):
         )  # weight tying -> perfomance improment
         self.apply(self._init_weights)
         for pn, p in self.named_parameters():
-            if p.dim() > 1 and pn.endswith("c_proj.weight"):
+            if p.dim() > 1 and pn.endswith("project_out.weight"):
                 torch.nn.init.normal_(
                     p, mean=0.0, std=0.02 / math.sqrt(2 * config.n_layers)
                 )
@@ -129,7 +128,7 @@ class ChordGPT(nn.Module):
 
         assert (
             T <= self.config.seq_len
-        ), f"Sequence length {t} exceeds block size {self.config.seq_len}"
+        ), f"Sequence length {T} exceeds block size {self.config.seq_len}"
 
         pos = torch.arange(0, T, dtype=torch.long, device=device)  # shape (t)
         # Token embedding + pos embedding
@@ -143,9 +142,6 @@ class ChordGPT(nn.Module):
         logits = self.lm_head(x)
 
         if targets is not None:
-            # Training: Calculate Loss
-            logits = self.lm_head(x)
-
             # Use CrossEntropyLoss (handles class imbalances and ignored padding)
             # Flatten: (B*T, Vocab)
             loss = F.cross_entropy(
